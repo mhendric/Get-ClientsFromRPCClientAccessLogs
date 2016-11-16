@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 1.0.0
+.VERSION 1.1.0
 
 .GUID 11dcc13e-2949-4481-aec5-9658d0fefaae
 
@@ -13,34 +13,57 @@
 #>
 
 <# 
-.Synopsis
+.SYNOPSIS
+ Parses the RPC Client Access logs of one or more Exchange 2010+ servers looking for a specific client operation
+ type, and exports the found results to .CSV.
+
+.DESCRIPTION
  Parses the RPC Client Access logs of one or more Exchange 2010+ servers looking for a specific client operation
  type, and exports the found results to .CSV. Performs the search of each target computer in parallel. The target
- computers perform their log search locally, and then return the results to the machine where the script is executed
+ computers perform their log search locally, and then return the results to the machine Where-Object the script is executed
  from. This approach conserves memory on the script computer, and significantly speeds up the collection time.
 
-.PARAMETERS
- -Computers: Defines the list of computers to search the RPC Client Access logs on. Computers should share the same log path. 
- -RPCLogPath: The local RPC Client Access log path on each target computer to search. Uses the default Exchang 2013/2016 path by default.
- -MaxAgeInDays: The maximum number of days to search within each log. Defaults to 7.
- -DesiredFields: The columns to retrieve from found results within each log. Defaults to "client-software", "client-software-version","user-email".
- -Operation: The operation type to look for in each log. Defaults to OwnerLogon.
- -ClientSoftware: If used, specifies a specific 'client-software' type to look for in the logs. If empty, gets all 'client-software' types.
- -Exclusions: A hashtable of column name/value pairs that should be excluded from results. Excluded HealthMailbox's by default.
- -GroupResultsByDesiredFields: Whether the results should be grouped by the types defined in DesiredFields. Defaults to $true
- -GroupResultsByTargetComputer: Whether the results should be grouped by the computer they were retrieved from. Defaults to $false
+.PARAMETER Computers
+ Defines the list of computers to search the RPC Client Access logs on. Computers should share the same log path.
 
-.EXAMPLE 1: Parses the RPC Client Access logs on two Exchange 2013/2016 servers
-PS> .\Get-ClientsFromRPCClientAccessLogs.ps1 -Computers ex2013srv1,ex2016srv2 -Verbose
+.PARAMETER RPCLogPath
+ The local RPC Client Access log path on each target computer to search. Uses the default Exchang 2013/2016 path by default.
 
-.EXAMPLE 2: Parses the RPC Client Access logs on two Exchange 2013/2016 servers for connect operations and gets the IP of each client
-PS> .\Get-ClientsFromRPCClientAccessLogs.ps1 -Computers ex2013srv1,ex2016srv2 -Operation "Connect" -DesiredFields @("client-software", "client-software-version","user-email","client-ip") -Verbose  
+.PARAMETER MaxAgeInDays
+ The maximum number of days to search within each log. Defaults to 7.
 
-.EXAMPLE 3: Parses the RPC Client Access logs on two Exchange 2013/2016 servers, and groups the results by each target computer.
-PS> .\Get-ClientsFromRPCClientAccessLogs.ps1 -Computers ex2013srv1,ex2016srv2 -GroupResultsByTargetComputer $true
+.PARAMETER DesiredFields
+ The columns to retrieve from found results within each log. Defaults to "client-software", "client-software-version","user-email".
 
-.EXAMPLE 4: Parses the RPC Client Access log on an Exchange 2010 server
-PS> .\Get-ClientsFromRPCClientAccessLogs.ps1 -Computers ex2010srv3 -RPCLogPath "C:\Program Files\Microsoft\Exchange Server\V14\Logging\RPC Client Access"
+.PARAMETER Operation
+ The operation type to look for in each log. Defaults to OwnerLogon.
+
+.PARAMETER ClientSoftware
+ If used, specifies a specific 'client-software' type to look for in the logs. If empty, gets all 'client-software' types.
+
+.PARAMETER Exclusions
+ A hashtable of column name/value pairs that should be excluded from results. Excluded HealthMailbox's by default.
+
+.PARAMETER GroupResultsByDesiredFields
+ Whether the results should be grouped by the types defined in DesiredFields. Defaults to $true
+
+.PARAMETER GroupResultsByTargetComputer: Whether the results should be grouped by the computer they were retrieved from. Defaults to $false
+
+.EXAMPLE
+ >Parses the RPC Client Access logs on two Exchange 2013/2016 servers
+ PS> .\Get-ClientsFromRPCClientAccessLogs.ps1 -Computers ex2013srv1,ex2016srv2 -Verbose
+
+.EXAMPLE
+ >Parses the RPC Client Access logs on two Exchange 2013/2016 servers for connect operations and gets the IP of each client
+ PS> .\Get-ClientsFromRPCClientAccessLogs.ps1 -Computers ex2013srv1,ex2016srv2 -Operation "Connect" -DesiredFields @("client-software", "client-software-version","user-email","client-ip") -Verbose  
+
+.EXAMPLE
+ >Parses the RPC Client Access logs on two Exchange 2013/2016 servers, and groups the results by each target computer.
+ PS> .\Get-ClientsFromRPCClientAccessLogs.ps1 -Computers ex2013srv1,ex2016srv2 -GroupResultsByTargetComputer $true
+
+.EXAMPLE
+ >Parses the RPC Client Access log on an Exchange 2010 server
+ PS> .\Get-ClientsFromRPCClientAccessLogs.ps1 -Computers ex2010srv3 -RPCLogPath "C:\Program Files\Microsoft\Exchange Server\V14\Logging\RPC Client Access"
 
 #>
 
@@ -99,7 +122,7 @@ function ValidateParameters
 
     [bool]$isValid = $true
 
-    if ($Computers -eq $null -or $Computers.Count -eq 0)
+    if ($null -eq $Computers -or $Computers.Count -eq 0)
     {
         Write-Error "Computers parameter must not be null or empty"
         $isValid = $false
@@ -117,7 +140,7 @@ function ValidateParameters
         $isValid = $false
     }
 
-    if ($DesiredFields -eq $null -or $DesiredFields.Count -eq 0)
+    if ($null -eq $DesiredFields -or $DesiredFields.Count -eq 0)
     {
         Write-Error "DesiredFields parameter must not be null or empty"
         $isValid = $false
@@ -135,6 +158,7 @@ function ValidateParameters
 function GetClientTypes
 {
     [CmdletBinding()]
+    [OutputType([System.Collections.Generic.List[System.Object]])]
     param
     (
         [string]
@@ -159,58 +183,58 @@ function GetClientTypes
         $GroupResultsByDesiredFields
     )
 
-    [Object[]]$connectionList = @()
+    [System.Collections.Generic.List[System.Object]]$connectionList = New-Object System.Collections.Generic.List[System.Object]
 
     if ((Test-Path -Path $RPCLogPath) -eq $true)
     {
         [DateTime]$oldestDate = [DateTime]::Now.AddDays($MaxAgeInDays * -1)
 
         $files = $null
-        $files = Get-ChildItem -LiteralPath "$($RPCLogPath)" -ErrorAction SilentlyContinue | where {$_.LastWriteTime -gt $oldestDate -and $_.Name -like "*.log" -and $_.Length -gt 0}
+        $files = Get-ChildItem -LiteralPath "$($RPCLogPath)" -ErrorAction SilentlyContinue | Where-Object {$_.LastWriteTime -gt $oldestDate -and $_.Name -like "*.log" -and $_.Length -gt 0}
 
-        if ($files -ne $null)
+        if ($null -ne $files)
         {
             foreach ($file in $files)
             {
                 $csvColumnsLine = $null
                 $csvColumns = $null
-                $csvColumnsLine = Get-Content -Path $file.FullName -TotalCount 10 | where {$_.StartsWith("#Fields")}
+                $csvColumnsLine = Get-Content -Path $file.FullName -TotalCount 10 | Where-Object {$_.StartsWith("#Fields")}
 
-                if ($csvColumnsLine -ne $null)
+                if ($null -ne $csvColumnsLine)
                 {
                     $csvColumns = $csvColumnsLine.Replace("#Fields: ", "").Split(',')
                 }
 
-                if ($csvColumns -ne $null)
+                if ($null -ne $csvColumns)
                 {
                     $csv = Import-Csv -Header $csvColumns -Path $file.FullName
                 }        
 
-                if ($csv -eq $null)
+                if ($null -eq $csv)
                 {
                     continue
                 }
 
-                $clientMatches = $csv | where {$_."operation" -like $Operation}
+                $clientMatches = $csv | Where-Object {$_."operation" -like $Operation}
 
                 if (([string]::IsNullOrEmpty($ClientName)) -eq $false)
                 {
-                    $clientMatches = $clientMatches | where {$_."client-software" -like $ClientSoftware}
+                    $clientMatches = $clientMatches | Where-Object {$_."client-software" -like $ClientSoftware}
                 }
 
                 if ($Exclusions -ne $null -and $Exclusions.Keys.Count -gt 0)
                 {
                     foreach ($key in $Exclusions.Keys)
                     {
-                        $clientMatches = $clientMatches | where {$_.$key -notlike $Exclusions[$key]}
+                        $clientMatches = $clientMatches | Where-Object {$_.$key -notlike $Exclusions[$key]}
                     }
                 }
 
-                if ($clientMatches -ne $null)
+                if ($null -ne $clientMatches)
                 {
                     foreach ($match in $clientMatches)
                     {
-                        $connectionList += ($match | Select-Object -Property $DesiredFields)
+                        $connectionList.Add(($match | Select-Object -Property $DesiredFields))
                     }
                 }
             }
@@ -248,7 +272,7 @@ if ((ValidateParameters -Computers $Computers -RPCLogPath $RPCLogPath -MaxAgeInD
     return
 }
 
-Write-Host "$([DateTime]::Now) Beginning remote RPC Client Access log search"
+Write-Verbose "$([DateTime]::Now) Beginning remote RPC Client Access log search"
 
 Write-Verbose "$([DateTime]::Now) Sending remote collection job"
 
@@ -256,10 +280,10 @@ $jobs = Invoke-Command -ComputerName $Computers -ScriptBlock ${function:GetClien
 
 Write-Verbose "$([DateTime]::Now) Waiting for job results"
 
-$silencer = Wait-Job $jobs
+Wait-Job $jobs | Out-Null
 $results = Receive-Job $jobs
 
-if ($results -ne $null)
+if ($null -ne $results)
 {
     if ($GroupResultsByTargetComputer -eq $true)
     {
@@ -301,4 +325,4 @@ else
     Write-Verbose "$([DateTime]::Now) Log search returned 0 results."
 }
 
-Write-Host "`n$([DateTime]::Now) Finished RPC Client Access log search"
+Write-Verbose "`n$([DateTime]::Now) Finished RPC Client Access log search"
